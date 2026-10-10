@@ -1,0 +1,261 @@
+﻿# PureRemote 绿色包打包（M5）
+#
+# 产出：dist/PureRemote/ —— 解压即用，不需要管理员、不装服务、不写注册表。
+#      dist/PureRemote.zip
+#
+# **没有卸载器**：卸载 = 删文件夹。这是刻意的（用户拍板），不要加。
+#
+# 目录布局（改这里之前先看 RustDeskController::cliExePath / TsnetBridge::findRelayExe，
+# 那两处按 <exe目录>/bin/ 找内核，布局一变就得同步改）：
+#
+#   PureRemote/
+#   ├─ PureRemote.exe        外壳
+#   ├─ qt.conf               Prefix = . / Plugins = plugins（**必须**，否则找不到平台插件直接起不来）
+#   ├─ Qt6*.dll  libgcc_s_seh-1.dll  …   windeployqt 铺的运行时
+#   ├─ plugins/              平台/样式/图片格式等插件
+#   ├─ bin/                  RustDesk 内核 + pmrelay
+#   └─ config/               外壳配置（首次运行自己生成 puremote.json）
+#
+# 幂等：每次从头重建 dist/PureRemote。**plugins 目录必须先删后建** —— windeployqt 只增不删，
+# 上一版留下的陈旧插件会被打进包里，出了问题极难查。
+
+[CmdletBinding()]
+param(
+    # Qt 的 bin 目录（windeployqt 在哪）。默认走本机 Qt 6.8.3 安装位置。
+    [string]$QtBin = "C:\Qt\6.8.3\mingw_64\bin",
+    # 已构建好的外壳 exe。默认取 build/ 下的 release 产物。
+    [string]$Exe,
+    # 输出目录。默认 <工程根>/dist/PureRemote
+    [string]$Out,
+    # 只出文件夹，不打 zip
+    [switch]$NoZip,
+    # 打完包跑一次真启动（抓图），验证 Qt 平台插件真能加载出来
+    [switch]$Smoke
+)
+
+$ErrorActionPreference = "Stop"
+Set-StrictMode -Version Latest
+
+# 从 bash / cmd 里跑时，中文经管道出来全是乱码，报错根本没法读。显式声明一次。
+try { [Console]::OutputEncoding = [System.Text.Encoding]::UTF8 } catch {}
+
+$root = Split-Path -Parent $PSScriptRoot          # 工程根（scripts/ 的上一级）
+
+function Step([string]$msg) { Write-Host "`n=== $msg ===" -ForegroundColor Cyan }
+function Ok([string]$msg)   { Write-Host "  ✔ $msg"     -ForegroundColor Green }
+function Warn([string]$msg) { Write-Host "  ! $msg"     -ForegroundColor Yellow }
+
+# ── 0. 前置检查 ──────────────────────────────────────────────────────────────
+Step "前置检查"
+
+if (-not $Exe) { $Exe = Join-Path $root "build\PureRemote.exe" }
+if (-not (Test-Path -LiteralPath $Exe)) {
+    throw "找不到外壳 exe：$Exe`n先构建：cmake --build --preset release"
+}
+Ok "外壳 exe：$Exe"
+
+if (-not $Out) { $Out = Join-Path $root "dist\PureRemote" }
+$outFull = [System.IO.Path]::GetFullPath($Out)
+# 防手抖：把输出目录指到工程根/盘根会把源文件删了。删目录是这脚本第一步干的事。
+if ($outFull.TrimEnd('\') -eq $root.TrimEnd('\') -or $outFull -eq [System.IO.Path]::GetPathRoot($outFull)) {
+    throw "输出目录不能是工程根或盘根（脚本会先清空它）：$outFull"
+}
+Ok "输出目录：$outFull"
+
+$windeploy = Join-Path $QtBin "windeployqt.exe"
+if (-not (Test-Path -LiteralPath $windeploy)) {
+    throw "找不到 windeployqt：$windeploy`n用 -QtBin 指定 Qt 的 bin 目录。"
+}
+Ok "windeployqt：$windeploy"
+
+$binSrc = Join-Path $root "bin"
+if (-not (Test-Path -LiteralPath (Join-Path $binSrc "rustdesk.exe"))) {
+    throw "找不到 bin/rustdesk.exe —— 内核不在，打出来的包是空的。"
+}
+if (-not (Test-Path -LiteralPath (Join-Path $binSrc "librustdesk.dll"))) {
+    # 没有 librustdesk.dll 说明 bin/ 里放的是 25MB 的 launcher 而不是真身。
+    # 真身是 369KB 薄壳 + 40MB dll；放错了外壳的 cliExePath() 会一路回落到
+    # %LOCALAPPDATA%，就又开始写用户目录了。
+    throw "bin/ 里是 launcher 不是解包后的真身（缺 librustdesk.dll）。见 bin/README.md。"
+}
+if (-not (Test-Path -LiteralPath (Join-Path $binSrc "pmrelay.exe"))) {
+    Warn "bin/pmrelay.exe 不存在 —— tsnet 档会在界面上报「未就绪」。其余档不受影响。"
+}
+Ok "bin/ 齐全"
+
+# ── 1. 重建输出目录 ──────────────────────────────────────────────────────────
+Step "重建输出目录"
+if (Test-Path -LiteralPath $outFull) {
+    # 报"文件被占用"多半是上一次打包出来的 exe 还在跑。
+    try {
+        Remove-Item -LiteralPath $outFull -Recurse -Force
+    } catch {
+        throw "清不掉 $outFull（多半是里面有进程还在跑）。关掉它再重跑。`n$($_.Exception.Message)"
+    }
+}
+New-Item -ItemType Directory -Path $outFull -Force | Out-Null
+Ok "已清空并重建"
+
+# ── 2. 外壳 + Qt 运行时 ──────────────────────────────────────────────────────
+Step "windeployqt"
+Copy-Item -LiteralPath $Exe -Destination (Join-Path $outFull "PureRemote.exe")
+Ok "已放入 PureRemote.exe"
+
+# --plugindir 直接铺到 plugins/，省掉"先铺再挪"那一步（挪的时候漏一个目录就是起不来）。
+# ⚠ **必须给绝对路径**：windeployqt 把 --plugindir 当**相对当前工作目录**解析，不是相对
+#   被部署的 exe。第一版写的是相对路径 "plugins"，结果插件全铺到了工程根
+#   （比如 <工程目录>/plugins/），包里一个都没有 —— 那个 exe 一启动就报
+#   "could not find or load the Qt platform plugin" 然后秒退，抓不到图。
+# **不要加 --no-compiler-runtime**：MinGW 的 libgcc_s_seh-1 / libstdc++-6 /
+# libwinpthread-1 是硬依赖，缺一个 exe 直接不动。
+# --no-translations 对，因为工程里没有加载任何 QTranslator，拷了也不会被用。
+# ⚠⚠ windeployqt 在这台机器上会**大概一半的概率**失败，报
+#   "Unable to query qtpaths: Error running binary qtpaths: Error creating stdout/
+#    stderr temporary file"（stdout/stderr 随机），退出码 1。
+#
+#   **根因是 %TEMP% 不干净，不是 windeployqt 本身。** 实测数据（每格 20 次）：
+#     · 默认 %TEMP%（几百个杂项）                → 11/20 失败
+#     · 全新建的空目录                           →  0/20（复测 3 轮，累计 0/60）
+#     · **在默认 %TEMP% 里开一个干净子目录**     →  0/20   ← 关键一条
+#     · 干净目录里塞 500 个垃圾文件              →  0/20
+#     · 干净目录里复刻 92 个 `.tmpXXXXXX` 目录名 →  0/20
+#   所以：**跟位置无关、跟文件数量无关、跟目录同名冲突也无关**（后两个假设都被实测推翻了），
+#   是默认 %TEMP% 里某个具体的东西在毒化 Qt 建子进程临时文件这一步。**没能钉死是谁**，
+#   别在注释或提交信息里编一个机制出来。
+#
+#   修法：给 windeployqt 一个**自己的干净临时目录**（跑完删掉）。这是把根因绕开，
+#   不是重试碰运气 —— 重试曾经是这里的方案，但那是拿 50% 的概率硬赌，而且
+#   每次失败都会往包里漏一次半成品状态。
+#
+#   ⚠ 同类问题也会打到别的 Qt 项目的打包脚本上（windeployqt 都走这条路）。
+#     PureViewer 的 deploy.ps1 里"报锁就清目录重跑"多半就是同一个病。
+$exeInPkg = Join-Path $outFull "PureRemote.exe"
+
+$deployTmp = Join-Path $root "build\deploy-tmp"
+if (Test-Path -LiteralPath $deployTmp) { Remove-Item -LiteralPath $deployTmp -Recurse -Force }
+New-Item -ItemType Directory -Path $deployTmp -Force | Out-Null
+Ok "私有临时目录：$deployTmp"
+
+# 存旧的三个变量再改（TMPDIR 可能压根没设，还原时要还原成"没设"，不能还原成空串）
+$savedTmp = @{}
+foreach ($k in @('TEMP', 'TMP', 'TMPDIR')) {
+    $savedTmp[$k] = [Environment]::GetEnvironmentVariable($k, 'Process')
+}
+try {
+    foreach ($k in @('TEMP', 'TMP', 'TMPDIR')) {
+        [Environment]::SetEnvironmentVariable($k, $deployTmp, 'Process')
+    }
+    # 重试留着当安全网：根因虽然绕过了，但真出别的岔子时多试两次不亏（幂等）。
+    $deployOk = $false
+    for ($attempt = 1; $attempt -le 3 -and -not $deployOk; $attempt++) {
+        & $windeploy --release --no-translations --plugindir (Join-Path $outFull "plugins") $exeInPkg
+        if ($LASTEXITCODE -eq 0) {
+            $deployOk = $true
+        } elseif ($attempt -lt 3) {
+            Warn "windeployqt 第 $attempt 次失败（退出码 $LASTEXITCODE），重试"
+        }
+    }
+    if (-not $deployOk) {
+        throw "windeployqt 连试 3 次都失败 —— 私有临时目录都救不回来，检查 Qt 安装是否完整。"
+    }
+} finally {
+    foreach ($k in @('TEMP', 'TMP', 'TMPDIR')) {
+        [Environment]::SetEnvironmentVariable($k, $savedTmp[$k], 'Process')
+    }
+    Remove-Item -LiteralPath $deployTmp -Recurse -Force -ErrorAction SilentlyContinue
+}
+
+# 硬检查：qwindows.dll 没了 = 这个包**必然**起不来。放在这里而不是只靠 -Smoke，
+# 是因为 -Smoke 是可选开关，而这一条是每次都必须成立的。
+$platformDll = Join-Path $outFull "plugins\platforms\qwindows.dll"
+if (-not (Test-Path -LiteralPath $platformDll)) {
+    throw "插件没铺进包里：$platformDll 不存在。多半是 --plugindir 没给绝对路径。"
+}
+Ok "运行时 + 插件已就位（platforms/qwindows.dll 在）"
+
+# ── 3. qt.conf ───────────────────────────────────────────────────────────────
+Step "写 qt.conf"
+# 插件被挪进了 plugins/，Qt 默认只会找 exe 同级的 platforms/ —— 不写这个文件，
+# 启动时报 "could not find or load the Qt platform plugin windows" 然后直接退。
+# 这是绿色包最经典的翻车点，`-Smoke` 就是用来验证这一条的。
+$qtConf = @"
+[Paths]
+Prefix = .
+Plugins = plugins
+"@
+# qt.conf 必须是 UTF-8 **无 BOM**，带 BOM 的话 Qt 的 ini 解析会把第一个键读成
+# "\ufeff[Paths]"，等于没写。Set-Content -Encoding UTF8 在 PS5 下会写 BOM，所以手动写字节。
+[System.IO.File]::WriteAllBytes(
+    (Join-Path $outFull "qt.conf"),
+    [System.Text.Encoding]::UTF8.GetBytes($qtConf)
+)
+Ok "qt.conf（UTF-8 无 BOM）"
+
+# ── 4. 内核 ──────────────────────────────────────────────────────────────────
+Step "拷 bin/"
+Copy-Item -LiteralPath $binSrc -Destination (Join-Path $outFull "bin") -Recurse -Force
+$binCount = (Get-ChildItem -LiteralPath (Join-Path $outFull "bin") -Recurse -File).Count
+Ok "bin/ $binCount 个文件"
+
+# ── 5. 冒烟（可选）───────────────────────────────────────────────────────────
+if ($Smoke) {
+    Step "冒烟：真启动一次"
+    $shot = Join-Path $env:TEMP "puremote-deploy-smoke.png"
+    Remove-Item -LiteralPath $shot -Force -ErrorAction SilentlyContinue
+    $p = Start-Process -FilePath (Join-Path $outFull "PureRemote.exe") `
+                       -ArgumentList "--screenshot", $shot `
+                       -PassThru -WindowStyle Hidden
+    if (-not $p.WaitForExit(60000)) {
+        $p.Kill()
+        throw "冒烟超时：部署出来的 exe 60 秒没退出。"
+    }
+    if (-not (Test-Path -LiteralPath $shot)) {
+        throw "冒烟失败：没抓到图 —— 多半是 Qt 平台插件没加载起来（查 qt.conf / plugins/platforms/）。"
+    }
+    Ok "能起来并完成渲染：$shot"
+}
+
+# ── 6. 空 config（**必须排在冒烟之后**）──────────────────────────────────────
+Step "config/"
+# ⚠ 这一步的位置很讲究。冒烟会**真的运行**包里的 exe，而外壳首次运行就会在
+#   exe 同级生成 config/puremote.json。上一版把建 config/ 放在冒烟之前，于是那份配置
+#   被原样打进了 zip —— 配置里带着这台机器的绝对路径，在别人机器上解压到别处，
+#   包里就躺着一份指向不存在路径的配置。
+#   （AppConfig 现在已经**不再持久化 rustdesk_path** 了，所以即使漏进去也不会再粘住旧路径；
+#     但开发机的配置本来就不该进包 —— 里面有联系人和 tailnet 授权密钥。）
+#   放在冒烟之后、打包之前，冒烟跑出来的残留就一律被清掉。
+$cfgDir = Join-Path $outFull "config"
+if (Test-Path -LiteralPath $cfgDir) {
+    Remove-Item -LiteralPath $cfgDir -Recurse -Force
+    Warn "已清掉冒烟跑出来的 config/（每次打包都该是空的）"
+}
+New-Item -ItemType Directory -Path $cfgDir -Force | Out-Null
+# 不放任何东西：puremote.json 由外壳首次运行自己生成。**绝不能把开发机的配置
+# 带进去** —— 里面有联系人、tailnet 授权密钥。
+Ok "空目录（首次运行时自动生成 puremote.json）"
+
+# ── 7. 打包 ──────────────────────────────────────────────────────────────────
+$totalMB = [math]::Round((Get-ChildItem -LiteralPath $outFull -Recurse -File |
+                          Measure-Object -Property Length -Sum).Sum / 1MB, 1)
+
+Step "结果"
+Ok "目录：$outFull  （$totalMB MB）"
+
+if (-not $NoZip) {
+    # 最后一道闸：config/ 必须是空的才允许打包。不管上面步骤怎么调顺序，
+    # 只要这一条在，开发机的配置（联系人 / tailnet 授权密钥 / 绝对路径）就进不了包。
+    $stray = @(Get-ChildItem -LiteralPath (Join-Path $outFull "config") -Recurse -File `
+                             -ErrorAction SilentlyContinue)
+    if ($stray.Count -gt 0) {
+        throw "config/ 里还有 $($stray.Count) 个文件，拒绝打包：$($stray[0].FullName)"
+    }
+
+    $zip = Join-Path $root "dist\PureRemote.zip"
+    Remove-Item -LiteralPath $zip -Force -ErrorAction SilentlyContinue
+    # -Path 传目录本身，包里就有 PureRemote/ 这一层，解压不会崩一地。
+    Compress-Archive -Path $outFull -DestinationPath $zip -CompressionLevel Optimal
+    $zipMB = [math]::Round((Get-Item -LiteralPath $zip).Length / 1MB, 1)
+    Ok "压缩包：$zip  （$zipMB MB）"
+}
+
+Write-Host "`n绿色包就绪。解压即用，删文件夹即卸载。`n" -ForegroundColor Green

@@ -1,0 +1,8 @@
+# 统一按 LF 存、按 LF 取出 —— 源码里有 .sh / .py / .go，CRLF 会让它们在别的工具里出洋相
+# （Windows 上默认 core.autocrlf=true，不加这一行，别人 clone 下来会得到一整套 CRLF）。
+* text=auto eol=lf
+
+*.png binary
+*.ico binary
+*.exe binary
+*.dll binary

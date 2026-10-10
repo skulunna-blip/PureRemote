@@ -1,0 +1,25 @@
+# 本机实文件（含个人路径），模板见 CMakePresets.json.example
+CMakePresets.json
+scripts/deploy.ps1
+
+# 构建产物
+build/
+build2/
+dist/
+
+# 第三方运行时（随包分发，不入库）—— 80MB / 106 文件，怎么来的见 bin/README.md
+bin/*
+!bin/README.md
+
+# 本机身份备份（含 enc_id / key_pair，绝不入库）
+RustDesk.toml.bak
+*.toml.bak
+
+# 编译出来的可执行文件不入库：Go 探针有 20MB+，源码就在 scripts/ 里，谁要谁自己编
+*.exe
+*.dll
+
+# Python 缓存
+__pycache__/
+*.pyc
+

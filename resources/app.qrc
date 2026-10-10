@@ -1,0 +1,21 @@
+<RCC>
+    <qresource prefix="/icons">
+        <file>icon.ico</file>
+    </qresource>
+    <!-- 图文教程里的示意图（自绘，不是截图）。改图要重跑 scripts/make_guide_images.py。
+         这里少列一张，rcc 在构建时就报错；列了但 Guide.cpp 里写错名字，则要到运行时
+         才表现为"图片框空着"，uitest 的 G 段就是拦后者的。
+         注意：XML 注释里不能出现连续两个减号，写命令行参数时别照抄。 -->
+    <!-- ⚠ 前缀只能是 "/"，不能写 "/guide"：<file> 里的路径已经带了 guide/，
+         资源名 = 前缀 + 文件路径，写重了就变成 :/guide/guide/xxx.png ——
+         构建不会报错，只是运行时图片框空着。uitest 的 G4 段就是拦这个的。 -->
+    <qresource prefix="/">
+        <file>guide/tsnet-net.png</file>
+        <file>guide/tsnet-keys.png</file>
+        <file>guide/net-modes.png</file>
+        <!-- 英文版示意图（同一脚本生成，文案换成英文，尺寸与中文版一致） -->
+        <file>guide/tsnet-net-en.png</file>
+        <file>guide/tsnet-keys-en.png</file>
+        <file>guide/net-modes-en.png</file>
+    </qresource>
+</RCC>
