@@ -202,9 +202,25 @@ if ($Smoke) {
     Step "冒烟：真启动一次"
     $shot = Join-Path $env:TEMP "puremote-deploy-smoke.png"
     Remove-Item -LiteralPath $shot -Force -ErrorAction SilentlyContinue
-    $p = Start-Process -FilePath (Join-Path $outFull "PureRemote.exe") `
-                       -ArgumentList "--screenshot", $shot `
-                       -PassThru -WindowStyle Hidden
+    # ⚠ 冒烟必须给一个**假 APPDATA**，否则它会**改掉你机器上的固定密码**。
+    #   包里 config/ 是空的（见下面第 6 步），所以这一跑在外壳看来就是"首次运行" →
+    #   首次运行会自动接管固定密码 → 真的去停/起 RustDesk 并重写
+    #   %APPDATA%\RustDesk\config\RustDesk.toml。2026-10-10 实测踩到：打完一个包，
+    #   开发机的密码从 KFWbkcauYT 变成了新生成的 Bk9bXN2hCq。
+    #   指到临时目录之后，`configDir()` 落到那边、`probePassword()` 读不到文件 →
+    #   "不知道就别动别人的东西"那条判据直接拦住，一个字都不会写。
+    #   （Qt 这边读环境变量，所以这招有效；rustdesk.exe 自己走 SHGetKnownFolderPath、
+    #     不认这个变量，但冒烟也不需要它认 —— 它只验"包里的 exe 能起来并渲染"。）
+    $appdataBak = $env:APPDATA
+    $env:APPDATA = Join-Path $env:TEMP "puremote-deploy-smoke-appdata"
+    New-Item -ItemType Directory -Path $env:APPDATA -Force | Out-Null
+    try {
+        $p = Start-Process -FilePath (Join-Path $outFull "PureRemote.exe") `
+                           -ArgumentList "--screenshot", $shot `
+                           -PassThru -WindowStyle Hidden
+    } finally {
+        $env:APPDATA = $appdataBak
+    }
     if (-not $p.WaitForExit(60000)) {
         $p.Kill()
         throw "冒烟超时：部署出来的 exe 60 秒没退出。"
@@ -233,6 +249,20 @@ New-Item -ItemType Directory -Path $cfgDir -Force | Out-Null
 # 不放任何东西：puremote.json 由外壳首次运行自己生成。**绝不能把开发机的配置
 # 带进去** —— 里面有联系人、tailnet 授权密钥。
 Ok "空目录（首次运行时自动生成 puremote.json）"
+
+# ── 6.5 许可文件（必须随包走）─────────────────────────────────────────────────
+Step "LICENSE"
+# 包里捆着 RustDesk 的 AGPL 二进制，那 AGPL 就要求**再分发时**把许可和来源一起给出去。
+# 仓库里的 LICENSE 只讲外壳自己是 MIT，别人拿到的如果只有一个 zip，就看不到"内核归谁、
+# 什么许可、源码在哪"——所以这两个文件必须进包，不能只放在 GitHub 上。
+$licenseSrc = Join-Path $root "LICENSE"
+$noticeSrc  = Join-Path $root "THIRD-PARTY-NOTICES.md"
+foreach ($f in @($licenseSrc, $noticeSrc)) {
+    if (-not (Test-Path -LiteralPath $f)) { throw "缺少 $f —— 打包前必须有它。" }
+}
+Copy-Item -LiteralPath $licenseSrc -Destination (Join-Path $outFull "LICENSE.txt") -Force
+Copy-Item -LiteralPath $noticeSrc  -Destination (Join-Path $outFull "THIRD-PARTY-NOTICES.txt") -Force
+Ok "LICENSE.txt + THIRD-PARTY-NOTICES.txt"
 
 # ── 7. 打包 ──────────────────────────────────────────────────────────────────
 $totalMB = [math]::Round((Get-ChildItem -LiteralPath $outFull -Recurse -File |
