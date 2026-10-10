@@ -19,14 +19,3 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
-
----
-
-This license covers the code in this repository (the Qt6 shell, the pmrelay
-helper, the build and verification scripts).
-
-It does NOT cover the RustDesk core, which is not part of this repository:
-RustDesk is licensed under the GNU Affero General Public License v3.0 by its
-authors (https://github.com/rustdesk/rustdesk). bin/README.md explains how to
-obtain and unpack the version this shell targets. Anyone redistributing a
-packaged build (which bundles that core) must comply with RustDesk's license.
