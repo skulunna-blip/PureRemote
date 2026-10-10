@@ -100,8 +100,12 @@ measurements only:
 
 ### Getting started
 
-There is no prebuilt download in this repository (it ships source only — the packaged build
-would bundle RustDesk's AGPL binaries). Build it:
+Download the portable build from the [Releases page](https://github.com/skulunna-blip/PureRemote/releases):
+unzip it anywhere and run `PureRemote.exe`. No installer, no administrator rights, no account.
+(The zip bundles RustDesk's AGPL binaries — licences and source links are inside it, in
+`THIRD-PARTY-NOTICES.txt`.)
+
+To build it yourself instead:
 
 1. Get Qt 6.8 (MinGW) and Ninja.
 2. `cp CMakePresets.json.example CMakePresets.json` and fill in your Qt and Ninja paths.
@@ -167,8 +171,9 @@ the original bytes.
   [LICENSE](LICENSE).
 * The **RustDesk core is not part of this repository** (binaries are git-ignored) and is
   licensed **AGPL-3.0** by its authors. `bin/README.md` explains how to fetch and unpack the
-  version this shell targets. A *packaged* build bundles that core, and anyone redistributing
-  such a build must comply with RustDesk's licence.
+  version this shell targets. The release zip **does** bundle that core, unmodified, and anyone
+  redistributing such a build must comply with RustDesk's licence —
+  see [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md).
 * Not affiliated with, endorsed by, or supported by the RustDesk project.
 
 ---
@@ -252,8 +257,11 @@ RustDesk 的认证链路对非加密存储回落明文校验，所以明文能�
 
 ### 怎么用
 
-仓库里**不提供打包好的下载**（只发源码 —— 打包会捆上 RustDesk 的 AGPL 二进制）。
-自己构建：
+从 [Releases 页](https://github.com/skulunna-blip/PureRemote/releases) 下载绿色包，
+解压到任意目录、双击 `PureRemote.exe` 就能用 —— 不用安装、不用管理员权限、不用注册账号。
+（包里捆着 RustDesk 的 AGPL 二进制，许可与源码链接见包内 `THIRD-PARTY-NOTICES.txt`。）
+
+也可以自己构建：
 
 1. 准备 Qt 6.8（MinGW）和 Ninja。
 2. `cp CMakePresets.json.example CMakePresets.json`，填上你自己的 Qt 与 Ninja 路径。
@@ -313,6 +321,6 @@ bash scripts/verify.sh
 
 * 本仓库的代码（外壳、辅助工具、脚本）是 **MIT**，见 [LICENSE](LICENSE)。
 * **RustDesk 内核不在本仓库里**（二进制被 git 忽略），版权归其作者、许可是 **AGPL-3.0**。
-  怎么获取和解包见 `bin/README.md`。**打包好的绿色包会捆上那个内核，再分发时必须遵守
-  它的许可。**
+  怎么获取和解包见 `bin/README.md`。**Releases 里的绿色包会捆上那个内核（未作修改），
+  再分发时必须遵守它的许可** —— 详见 [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md)。
 * 本项目与 RustDesk 官方无隶属关系，也未获其背书或支持。
