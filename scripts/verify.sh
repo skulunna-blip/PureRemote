@@ -48,16 +48,20 @@
 #        `ipc connection closed: reset by the peer`）。旧判据会让"服务端死了、界面还在"
 #        这种状态被判成一切正常 —— 机器静默连不进来，连它自己都报"目标设备离线"。
 #      ③ 判据是 log\server\ 那份日志被写 —— 只有 --server 会写那里，等于间接证明了无窗口启动
-#   9. --tsnettest：tsnet 桥接（20 项断言：协议解析 T1-T12 + 真两端互连 B1-B8）
+#   9. --tsnettest：tsnet 桥接（26 项断言：协议解析 T1-T18 + 真两端互连 B1-B8）
+#      T13-T18 钉的是 **serve（常驻桥接，生产路径）**：一个进程一个 tailnet 节点，
+#      既让这台机器一直挂在 tailnet 上（别人连得进来），又按外壳写的对端文件连出去。
 #      需要 Tailscale authkey：优先环境变量 TS_AUTHKEY，其次 config/puremote.json 的
 #      tsnet_authkey。都没有就 SKIP（不计失败，**也不冒充全绿**）。
 #      ⚠ 会在你的 tailnet 里注册两个测试设备（puremote-test-a / -b），不会自动注销 ——
 #        嫌乱去 console.tailscale.com/admin/machines 删掉纯测试设备即可。
 #      ⚠ B 段固定走中继（hkg）：单机上两个 tsnet 节点会挑到一条走不通的假"直连"
 #        （本机自己的 LAN 地址），跨机真 P2P 需要两台机器，仍未验证。
-#  10. --booktest：地址簿 / 连接命令 / 时序状态机 / 准备情况（84 项断言）
+#  10. --booktest：地址簿 / 连接命令 / 时序状态机 / 准备情况（97 项断言）
 #      A 段真读写 config/puremote.json（跑完按字节还原）、C 段是 dry-run（**不起真进程**，
 #      验的是时序与参数构造，不证明 RustDesk 真会按这个参数连上）、D 段纯函数。
+#      C34-C43 钉 **serve 常驻桥接**那条路（外面一直显示"等待对方上线"那个 bug 的回归）：
+#      写对端文件 / 名字不对不放行 / 换对端要改写 / 断开不许把桥接一起收走 / 超时文案带上本机状态。
 #      E 段要 authkey（同上取法，没有就 SKIP 并**写明这段没验证**）：起一个真 Connect 桥接、
 #      对端用一个不存在的 tailnet 主机名，证明"对端不上线就不放行"这条闸门在真 pmrelay 上成立。
 #      ⚠ 会在你的 tailnet 里登记 puremote-test-b 这个测试设备（复用第 9 项的，不新增）。

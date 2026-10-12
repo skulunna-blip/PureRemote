@@ -139,6 +139,11 @@ signals:
     // 用户看到的是"点了重启，窗口闪一下没了"。
     void restartRequested();
 
+    // 网络路径的配置变了（换了档位，或者点了「立即应用」把主机名/密钥写进去）。
+    // 常驻 tailnet 桥接的生死归 main.cpp 管 —— 它是不是该活着，只取决于配置，
+    // 不取决于窗口里发生了什么。
+    void networkSettingsChanged();
+
 protected:
     void closeEvent(QCloseEvent* e) override;
     bool event(QEvent* e) override;      // 只为接 LayoutRequest → 重量主界面宽度

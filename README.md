@@ -55,6 +55,12 @@ a direct connection and falls back to a relay.
 | **Cloudflare Workers** | point the core at your own hbbs/hbbr | you deploy it; `locationHint` must be `apac` to land in Hong Kong / Japan |
 | **Custom address** | any `host:port` (frp, port forwarding, …) | simplest if you already own a server |
 
+⚠ **The tsnet path needs both machines to be running PureRemote.** A machine's presence on
+the tailnet *is* the bridge process inside the shell, so a peer that is not running PureRemote
+is not on the tailnet at all — the connection then sits on "Waiting for the peer to come
+online…" indefinitely. The Tailscale admin console will still show a node with a `connect`
+action; that row is **you** (the local hostname you configured), not the peer.
+
 Why not just install the official Tailscale client? Because Windows has no built-in TUN
 device: any software that hands the machine an IP must ship `wintun.sys`, and installing a
 kernel driver always requires administrator rights. `tsnet` is Tailscale's official userspace
@@ -214,9 +220,14 @@ the original bytes.
 | 档位 | 做什么 | 说明 |
 |---|---|---|
 | **官方服务器** | 什么都不用配 | 默认。国内实测信令 220ms，打洞失败会退回纽约 / 法国的中继 |
-| **tsnet 桥接** | 自写 `pmrelay.exe` 把两端接进 tailnet | 免管理员、不装驱动；实测中继 **54ms vs 官方 184ms** |
+| **tsnet 桥接** | 自写 `pmrelay.exe` 把本机常驻在 tailnet 上（`serve` 一个进程一个节点；连谁由外壳写文件指定） | 免管理员、不装驱动；实测中继 **54ms vs 官方 184ms** |
 | **Cloudflare Workers** | 自建 hbbs / hbbr | 要自己部署；`locationHint` 必须设 `apac` 才落到香港 / 日本 |
 | **自填地址** | 任意 `host:port`（frp / 端口映射） | 已经有服务器的话最省事 |
+
+⚠ **tsnet 这条路要求两台机器都开着 PureRemote。** 一台机器在 tailnet 上的"存在"，就是
+外壳里那个桥接进程（它常驻在 tailnet 上，别人随时连得进来）；所以**没开 PureRemote 的那台
+等于不在 tailnet 上**，连接会一直停在「正在等对方上线…」。Tailscale 网页控制台上仍然会
+看到一个带 `connect` 的节点 —— 那一行是**你自己**（你填的本机主机名），不是对方。
 
 **为什么不能用 Tailscale 官方客户端**：Windows 内核没有内置 TUN 设备，任何能给机器发 IP
 的软件都必须自带 `wintun.sys`，而装内核驱动在 Windows 上永远需要管理员。`tsnet` 是

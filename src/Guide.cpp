@@ -128,6 +128,24 @@ other out). Then click "Apply now" to write it in.</p>
 <p>Go back to "Connect to another computer", create a contact, enter the <b>peer's tailnet
 hostname</b>, and click "Connect".</p>
 
+<h3>⚠ Step 5: the other machine has to keep PureRemote running (the step everyone misses)</h3>
+<p>Your presence on the tailnet <b>is</b> the bridge process inside PureRemote. So if the
+other machine does not have PureRemote running, <b>it simply does not exist on the
+tailnet</b> — the status line will sit on "Waiting for the peer to come online…" forever.</p>
+<ul>
+  <li>The other machine must also be set to the <b>tailnet</b> mode with its own
+      <b>hostname and auth key</b>, and PureRemote must <b>stay running</b> (minimized to
+      the tray is fine; closing the program is not).</li>
+  <li>The very first time after entering the key it takes tens of seconds to register on
+      the tailnet — "Logging in to tailnet…" is normal.</li>
+  <li>That machine also has to let people in: see the fixed password / no-confirmation
+      setup in the "Get started" topic.</li>
+</ul>
+<p style='color:#ffb454;'><b>Do not read the Tailscale admin console's "connect" as proof
+that the peer is online</b> — that row is <b>you</b> (the local hostname you just typed).
+It being online only means your machine joined; it says nothing about the peer. To find
+out whether the peer is up, look at whether PureRemote is running on it.</p>
+
 <hr/>
 <p style='color:#999999; font-size:12px;'>
 No admin rights, no drivers, no registry writes — tsnet runs entirely in user space.<br/>
@@ -294,6 +312,21 @@ QString html(const QString& key)
 <h3>第 4 步：连</h3>
 <p>回到「连接别的电脑」建一条联系人，把<b>对方的 tailnet 主机名</b>填进去，
 点「连接」。</p>
+
+<h3>⚠ 第 5 步：对方那台要开着 PureRemote（最容易漏的一条）</h3>
+<p>你在 tailnet 上"存在"，靠的就是 PureRemote 里那个桥接进程。所以：<b>对方那台如果
+没开 PureRemote，它在 tailnet 上就根本不存在</b> —— 这时界面下方会一直显示
+「正在等对方上线…」，等多久都不会好。</p>
+<ul>
+  <li>对方那台也要把档位设成 <b>tailnet</b>、填好<b>主机名和授权密钥</b>，
+      并且<b>保持 PureRemote 开着</b>（最小化到托盘没关系，关掉程序就不行了）。</li>
+  <li>刚填好密钥的头一次要等几十秒（在 tailnet 上注册自己），状态显示
+      「正在登录 tailnet…」属正常。</li>
+  <li>对方那台还得让人连得进来：见「先用起来」那篇里说的固定密码 / 免确认。</li>
+</ul>
+<p style='color:#ffb454;'><b>别拿 Tailscale 网页上的 "connect" 当对方在线的证据</b> ——
+那一行是你<b>自己</b>（就是你刚填的本机主机名）。它在线只说明你这台挂上去了，
+<b>不代表对方在线</b>。要确认对方在不在，去看对方那台机器上 PureRemote 是不是开着。</p>
 
 <hr/>
 <p style='color:#999999; font-size:12px;'>

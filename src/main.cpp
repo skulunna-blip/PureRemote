@@ -1336,6 +1336,40 @@ static int runTsnetTest()
         check("T12 READY(connect) 说明里带上本机监听与对端",
               readyDetail.contains(QStringLiteral("127.0.0.1:21119"))
                   && readyDetail.contains(QStringLiteral("pa:21118")));
+
+        // serve：一个进程两个角色。READY 行两边都得说清楚 —— 左边是"别人连得进来"，
+        // 右边是"我要连出去"，少哪一半都不行。
+        b.feedLineForTest(QStringLiteral(
+            "PMRELAY READY mode=serve ip=100.101.102.106 hostname=my-pc listen=21118 "
+            "target=127.0.0.1:21118 local=127.0.0.1:21119"));
+        check("T13 READY(serve) 说明里同时带 tailnet 侧和本机入口",
+              readyDetail.contains(QStringLiteral("100.101.102.106"))
+                  && readyDetail.contains(QStringLiteral("127.0.0.1:21119"))
+                  && readyDetail.contains(QStringLiteral("my-pc")));
+        check("T14 READY(serve) 也把 tailnet IP 记下来（isReady 就是靠它）",
+              b.isReady() && b.tailnetIp() == QStringLiteral("100.101.102.106"));
+
+        b.feedLineForTest(QStringLiteral("PMRELAY PEER name=other-pc online=false relay= direct="));
+        check("T15 PEER 行要记下**对端名字**：peerOnline 配上 peerName 才有意义",
+              b.peerName() == QStringLiteral("other-pc"));
+
+        // 常驻桥接（serve）是同一个进程连着给不同对端干活，所以"变没变"必须**连名字一起判**：
+        // 上一个对端在线、这次要连的那个也刚上线，两行都是 online=true ——
+        // 只看 online 的话第二声根本不发出去，外壳就会一直等一个**已经在线**的人。
+        // 这是「一直显示等待对方上线」那个 bug 的第二层（第一层是被控端压根没上 tailnet）。
+        {
+            TsnetBridge b2;
+            int         n = 0;
+            QObject::connect(&b2, &TsnetBridge::peerStateChanged,
+                             [&n](bool, const QString&, const QString&) { ++n; });
+            b2.feedLineForTest(QStringLiteral("PMRELAY PEER name=pa online=true relay=hkg direct="));
+            check("T16 换了对端名字、online 没变，也必须发信号（不然会一直等一个已经在线的人）",
+                  n == 1);
+            b2.feedLineForTest(QStringLiteral("PMRELAY PEER name=pb online=true relay=hkg direct="));
+            check("T17 名字变了就算作「变化」：第二声要发出来", n == 2);
+            b2.feedLineForTest(QStringLiteral("PMRELAY PEER name=pb online=true relay=hkg direct="));
+            check("T18 名字和 online 都没变 → 不发（否则界面每 2 秒被刷一遍）", n == 2);
+        }
     }
 
     // ---- B 段：真桥接 ----
@@ -1944,6 +1978,142 @@ static int runBookTest()
             s8.connectToAdhoc(ad2);
             check(QStringLiteral("C33 填码直接连：tsnet 档照样先走桥接（没绕开档位）"),
                   s8.phase() == ConnectSession::Phase::Preparing && !b8.isRunning());
+        }
+
+        // ---- 常驻桥接（外壳启动时就挂着的那种）：只换对端，不碰进程 --------------
+        //
+        // 这是「一直显示等待对方上线、网页上看却是 connect」那个 bug 的回归钉。
+        // 根因不在网络：以前**被控端从来没进过 tailnet** —— 桥接只在连接期间起，
+        // 而且只连出去、不对外暴露，所以对端那台机器根本不在 tailnet 上，
+        // 等多久都等不到。修法就是这里这条路径：外壳启动就把 serve 桥拉起来
+        // （这台机器常驻在 tailnet 上），连接时只改"连谁"。
+        {
+            const QString tmpDir =
+                QDir(QDir::tempPath()).filePath(QStringLiteral("puremote-c-hbridge"));
+            QDir().mkpath(tmpDir);
+            const QString peerFile = tmpDir + QStringLiteral("/peer.txt");
+            QFile::remove(peerFile);
+
+            TsnetBridge b9;
+            b9.setModeForTest(TsnetBridge::Mode::Serve);   // 常驻桥接
+            b9.setRunningForTest(true);                    // 外壳已经把它拉起来了
+            b9.setPeerFile(peerFile);
+            // 桥接早就登录好了（这台机器一直挂在 tailnet 上），
+            // 这一刻是**同步**到的：不带任何边沿信号，全靠 level 状态
+            b9.feedLineForTest(QStringLiteral("PMRELAY READY mode=serve ip=100.64.0.9 "
+                                              "hostname=self-name listen=21118 "
+                                              "target=127.0.0.1:21118 local=127.0.0.1:21119"));
+
+            ConnectSession s9(&cfg, nullptr, &b9, &bookC);
+            s9.setDryRunForTest(true);   // 只压**客户端进程**，这条路径不碰任何进程
+            s9.connectTo(1);             // 那条 tsnet_host = peer-host 的联系人
+
+            QFile pfR(peerFile);
+            QString peerWritten;
+            if (pfR.open(QIODevice::ReadOnly))
+                peerWritten = QString::fromUtf8(pfR.readAll()).trimmed();
+            check(QStringLiteral("C34 常驻桥接：把「这次连谁」写进了 pmrelay 读的那个文件"),
+                  peerWritten == QStringLiteral("peer-host"));
+            check(QStringLiteral("C35 常驻桥接：对端还没上线 → 停在 WaitingPeer，不拉客户端"),
+                  s9.phase() == ConnectSession::Phase::WaitingPeer && !s9.clientSpawnedForTest());
+
+            // 线上来的是**别人**的 online=true（常驻桥接是同一个进程连着给不同对端干活，
+            // 上一轮那个对端可能还在线）。拿这个结论去连就会连错人 —— 必须在这里拦住。
+            b9.feedLineForTest(
+                QStringLiteral("PMRELAY PEER name=some-other-pc online=true relay=hkg direct="));
+            check(QStringLiteral("C36 常驻桥接报的**别人**在线，不被当成我在等的那个对端"),
+                  s9.phase() == ConnectSession::Phase::WaitingPeer && !s9.clientSpawnedForTest());
+
+            // 这一次才是真的。注意 online 还是 true、**没有变化** —— 桥接那边判"变没变"
+            // 要是只看 online，这一声根本发不出来，外壳就会一直等着一个已经在线的人。
+            b9.feedLineForTest(
+                QStringLiteral("PMRELAY PEER name=peer-host online=true relay=hkg direct="));
+            check(QStringLiteral("C37 名字对了才放行（而且 online 没变也必须发得出来）"),
+                  s9.phase() == ConnectSession::Phase::Running && s9.clientSpawnedForTest());
+            check(QStringLiteral("C38 目标还是桥接的本机入口 127.0.0.1:21119"),
+                  s9.lastTargetForTest() == QStringLiteral("127.0.0.1:21119"));
+
+            s9.disconnectNow();
+            check(QStringLiteral("C39 断开**不会**把常驻桥接一起收走"
+                                 "（收走 = 这台机器从 tailnet 上消失，别人再也连不进来）"),
+                  b9.isRunning() && b9.mode() == TsnetBridge::Mode::Serve);
+
+            // 换一个对端：文件必须被改写，否则点谁都会连到上一个人
+            Contact c9;
+            c9.tsnetHost = QStringLiteral("another-pc");
+            s9.connectToAdhoc(c9);
+            QFile pfR2(peerFile);
+            QString peer2;
+            if (pfR2.open(QIODevice::ReadOnly))
+                peer2 = QString::fromUtf8(pfR2.readAll()).trimmed();
+            check(QStringLiteral("C40 换一个对端 → 文件被改写，且不会误用上一个对端的在线状态"),
+                  peer2 == QStringLiteral("another-pc")
+                      && s9.phase() == ConnectSession::Phase::WaitingPeer
+                      && !s9.clientSpawnedForTest());
+        }
+
+        // ---- 等对端等到超时：文案里必须带上**本机自己**的状态 ----
+        // 用户报的就是"一直等对方上线"，而这句话本身没有可下手的地方：
+        // 得能一眼看出该去查对方、还是本机自己就没登上。
+        {
+            TsnetBridge    b10;
+            ConnectSession s10(&cfg, nullptr, &b10, &bookC);
+            s10.setDryRunForTest(true);
+            QString fail10;
+            QObject::connect(&s10, &ConnectSession::failed,
+                             [&fail10](const QString& m) { fail10 = m; });
+            s10.connectTo(1);
+            s10.feedBridgeReadyForTest();
+            check(QStringLiteral("C41 超时前确实停在 WaitingPeer"),
+                  s10.phase() == ConnectSession::Phase::WaitingPeer);
+            s10.feedPeerTimeoutForTest();
+            check(QStringLiteral("C42 超时文案点出**最常见的原因**（对方没开着本程序）"),
+                  s10.phase() == ConnectSession::Phase::Failed
+                      && fail10.contains(QStringLiteral("没开着本程序")));
+            check(QStringLiteral("C43 超时文案还带上本机状态：本机也没登上就得说（不然会去查错的那一头）"),
+                  fail10.contains(QStringLiteral("本机")));
+        }
+
+        // ---- 常驻桥接**根本没登上 tailnet**：立刻说清楚，别让用户白等 ----
+        {
+            const QString tmpDir2 =
+                QDir(QDir::tempPath()).filePath(QStringLiteral("puremote-c-hbridge2"));
+            QDir().mkpath(tmpDir2);
+            const QString peerFile2 = tmpDir2 + QStringLiteral("/peer.txt");
+
+            TsnetBridge b11;
+            b11.setModeForTest(TsnetBridge::Mode::Serve);
+            b11.setRunningForTest(true);
+            b11.setPeerFile(peerFile2);
+            // 外壳启动时那次登录就失败了（密钥不对 / 端口被占 / 程序缺失）
+            b11.feedLineForTest(QStringLiteral("PMRELAY FATAL what=login-failed "
+                                               "detail=authkey_is_not_valid"));
+
+            ConnectSession s11(&cfg, nullptr, &b11, &bookC);
+            s11.setDryRunForTest(true);
+            QString fail11;
+            QObject::connect(&s11, &ConnectSession::failed,
+                             [&fail11](const QString& m) { fail11 = m; });
+            s11.connectTo(1);
+            check(QStringLiteral("C44 桥接 FATAL 了 → 立刻 Failed（不是干等一分钟）"),
+                  s11.phase() == ConnectSession::Phase::Failed
+                      && fail11.contains(QStringLiteral("没登上 tailnet")));
+            check(QStringLiteral("C45 这条路上也不许拉起客户端"), !s11.clientSpawnedForTest());
+
+            // ⚠ 反面：ERROR 不等于 FATAL。`target-dial-failed` 只是"某一次转发没连上"
+            //   （对端没开、RustDesk 没起），桥接本身好好活着 —— 拿 lastError 去判死
+            //   会把一个好桥接误判成"没登上 tailnet"，那比不提示更坏。
+            TsnetBridge b12;
+            b12.setModeForTest(TsnetBridge::Mode::Serve);
+            b12.setRunningForTest(true);
+            b12.setPeerFile(peerFile2);
+            b12.feedLineForTest(QStringLiteral("PMRELAY ERROR what=target-dial-failed "
+                                               "detail=connect_ex_refused"));
+            ConnectSession s12(&cfg, nullptr, &b12, &bookC);
+            s12.setDryRunForTest(true);
+            s12.connectTo(1);
+            check(QStringLiteral("C46 一次失败的转发（ERROR）不算桥接坏了 —— 照样正常等对端"),
+                  s12.phase() == ConnectSession::Phase::Preparing && b12.isRunning());
         }
     }
 
@@ -4389,6 +4559,43 @@ int main(int argc, char* argv[])
     NetworkProbe   probe;
     MainWindow win(&config, &rd, &policy, &notify, &book, &session, &probe);
     probe.startPathWatch();
+
+    // ── 常驻 tailnet 桥接的生死 ────────────────────────────────────────────────
+    // ⚠ 这段是「等待对方上线」那个 bug 的修复核心，别把它当优化删掉。
+    //   它**不是"连接时才需要"的东西** —— 它就是"这台机器挂在 tailnet 上"这件事本身。
+    //   以前这里只创建了桥接对象、等用户点连接才起一个 connect 进程（只连出去、
+    //   不对外暴露），于是**被控端从来没进过 tailnet**：对端那边永远「等待对方上线」，
+    //   而管理控制台里那个在线的节点其实是他自己。serve 模式一个进程干两件事，
+    //   开机就挂着，这台机器才真的能被 tailnet 上的别人连进来。
+    QString bridgeCfg;   // 当前桥接是按哪套配置起来的（主机名 + 密钥），用来判"要不要重启"
+    auto    syncTsnetBridge = [&] {
+        const QString host = config.tsnetHostname().trimmed();
+        const QString key  = config.tsnetAuthKey().trimmed();
+        const QString want = host + QLatin1Char('\n') + key;
+        // 截屏/验收跑的是"渲染这一份"，别在后台真去登录一个 tailnet
+        const bool    on   = !shotRun && config.netMode() == QLatin1String("tsnet")
+                             && !host.isEmpty() && !key.isEmpty();
+        if (!on) {
+            if (bridge.isRunning()) {
+                bridge.stop();
+                bridgeCfg.clear();
+            }
+            return;
+        }
+        // 已经在按这套配置跑着就别动它 —— 重启一次要几十秒才重新上线，而且这期间
+        // 这台机器在 tailnet 上是不存在的（正是别人连不进来的窗口）。
+        if (bridge.isRunning() && bridge.mode() == TsnetBridge::Mode::Serve && bridgeCfg == want)
+            return;
+        if (bridge.isRunning())
+            bridge.stop();
+        bridge.setAuthKey(key);
+        bridge.setHostname(host);
+        bridgeCfg = want;
+        if (!bridge.start(TsnetBridge::Mode::Serve))
+            qWarning("tailnet 常驻桥接没起来：%s", qUtf8Printable(bridge.lastError()));
+    };
+    syncTsnetBridge();
+    QObject::connect(&win, &MainWindow::networkSettingsChanged, &app, syncTsnetBridge);
 
     // 「立即重启」（设置框里换完语言按的那个按钮）。真正的活在 main 里 —— 只有这里
     // 拿得到 QLocalServer。

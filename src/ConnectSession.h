@@ -15,7 +15,7 @@ class QTimer;
 // 一次连接的编排。两条路：
 //
 //  官方 ID 档：  拿对方的 RustDesk ID → 直接 --connect。不碰桥接。
-//  tsnet 档：    先起 pmrelay 桥接 → **等对端真的上线** → 才 --connect 127.0.0.1:21119。
+//  tsnet 档：    桥接就位 → **等对端真的上线** → 才 --connect 127.0.0.1:21119。
 //
 // ⚠ 顺序不能反。M4.0 闸门实测：对端没上线就 dial，会白等一次 Windows 系统级 connect
 //   超时（20s+），而且错得很难看。所以 WaitingPeer 这个阶段是必须的，不是保险。
@@ -23,6 +23,16 @@ class QTimer;
 // ⚠ 还有个坑：TsnetBridge::peerStateChanged 是**边沿触发**的（状态没变不重发）。
 //   对端可能在我们接槽之前就已经上线 —— 那唯一一次 online=true 会被丢掉，然后干等到超时。
 //   所以桥接 ready 之后必须用 **level getter（bridge->peerOnline()）兜底**，不能只等信号。
+//
+// ⚠ tsnet 档自己分两种桥接，别搞混：
+//   · **常驻（Mode::Serve）**：外壳启动时就拉起来了，这台机器一直挂在 tailnet 上。
+//     这里只做三件事 —— 把"这次连谁"写给桥接（peerfile）、等它报 online、拉客户端。
+//     **绝不 start()/stop() 它**：那是整台机器的对外可达性，不是这次连接的东西。
+//   · **一次性（Mode::Connect）**：老路径，连接期间起、连完停。测试（C/E 段）走这条。
+//
+// ⚠ 常驻模式下 peerOnline() **必须配上 peerName() 一起看**：它是"上一行 PEER 说的那个
+//   对端"的状态，可能是上一次连接的那个人。只看 online 就会拿着别人的结论去连 —
+//   在 M4.0 那个坑上一模一样地再摔一次。
 class ConnectSession : public QObject
 {
     Q_OBJECT
@@ -77,6 +87,9 @@ public:
                               const QString& direct = QString());
     void feedBridgeErrorForTest(const QString& what, const QString& detail = QString());
     void feedBridgeStoppedForTest();
+    // 等对端超时那条：真跑要等满 m_peerTimeoutMs（C 段是同步的，事件循环不转），
+    // 所以直接调那个槽。钉的是**超时文案里有没有本机自己的状态**。
+    void feedPeerTimeoutForTest() { onPeerTimeout(); }
     QStringList lastConnectArgsForTest() const { return m_lastArgs; }
     QString lastTargetForTest() const { return m_lastTarget; }
     bool    clientSpawnedForTest() const { return m_launched; }
@@ -108,6 +121,12 @@ private:
     void beginTsnet(const class Contact& c);
     void cleanup(bool stopBridge);
     bool tsnetMode() const;
+    // 桥接是不是"外壳启动就拉起来、全程不退出"的那个（Mode::Serve）。是的话这次连接
+    // 只换对端、不碰进程生命周期。
+    bool persistentBridge() const;
+    // 桥接报的在线状态，**是不是关于 m_armedPeer 这个对端的**。
+    // 名字对不上就说明那是上一次连接的结论，不能拿来用。
+    bool peerIsCurrentAndOnline() const;
 
     AppConfig*          m_config = nullptr;
     RustDeskController* m_rd     = nullptr;
@@ -128,4 +147,5 @@ private:
     bool        m_cleaning = false;        // 我们自己收尾时停的桥接，不算"桥接断了"
     QStringList m_lastArgs;
     QString     m_lastTarget;
+    QString     m_armedPeer;   // 这次写给常驻桥接的对端（空 = 不是常驻模式）
 };

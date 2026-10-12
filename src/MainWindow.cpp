@@ -1932,6 +1932,8 @@ void MainWindow::onNetModeChanged(int index)
     updateConnectUi();
     updateQualityUi();
     updateBanner();
+    // 档位从 tsnet 换走 / 换到 tsnet，常驻桥接的生死跟着变（main 那边处理）
+    emit networkSettingsChanged();
 }
 
 // 自建服务器四个框：改完落盘（跟 tsnet 那两个一样，是**本机**的属性不是联系人的）
@@ -1976,6 +1978,8 @@ void MainWindow::onNetApplyClicked()
             TR("已切换到「%1」，RustDesk 配置写好了")
                 .arg(AppConfig::netModeTitle(m_config->netMode())), 4000);
         updateNetUi();
+        // 主机名 / 授权密钥也在这条路上落盘 —— 常驻桥接要按新值重启（main 那边处理）
+        emit networkSettingsChanged();
     } else {
         statusBar()->showMessage(TR("没写成：%1").arg(err), 8000);
     }

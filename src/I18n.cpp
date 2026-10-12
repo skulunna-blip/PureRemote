@@ -637,6 +637,8 @@ const QVector<Pair>& table()
           QStringLiteral("Can't read APPDATA, so RustDesk's log can't be watched") },
 
         // ── ConnectSession ────────────────────────────────────────────────
+        { QStringLiteral("写不进桥接的对端文件 —— 程序目录可能是只读的"),
+          QStringLiteral("Couldn't write the bridge's peer file — the program folder may be read-only") },
         { QStringLiteral("未连接"),                     QStringLiteral("Not connected") },
         { QStringLiteral("正在登录 tailnet…"),          QStringLiteral("Signing in to the tailnet…") },
         { QStringLiteral("正在等对方上线…"),            QStringLiteral("Waiting for the other side to come online…") },
@@ -668,11 +670,24 @@ const QVector<Pair>& table()
           QStringLiteral("The connection client exited (code %1)") },
         { QStringLiteral("对端上线了，但这条联系人没填 tailnet 主机名"),
           QStringLiteral("The other side came online, but this contact has no tailnet hostname") },
-        { QStringLiteral("等了 %1 秒，对方还没在 tailnet 上出现 —— 检查对方那台是不是开着，"
-                         "以及它的 tailnet 主机名填对没有"),
+        { QStringLiteral("等了 %1 秒，对方还没在 tailnet 上出现 —— 最常见的原因是对方那台"
+                         "没开着本程序（程序不开，它在 tailnet 上就不存在），其次是对方的 "
+                         "tailnet 主机名填错了。%2"),
           QStringLiteral("Waited %1 seconds and the other side still hasn't appeared on the "
-                         "tailnet — check that their machine is on, and that their tailnet "
-                         "hostname is spelled correctly") },
+                         "tailnet — the usual cause is that their machine is not running this "
+                         "app (with it closed they simply do not exist on the tailnet); the "
+                         "next most common is a misspelled tailnet hostname. %2") },
+        { QStringLiteral("（本机已经在 tailnet 上了）"),
+          QStringLiteral("(this machine is already on the tailnet)") },
+        { QStringLiteral("（本机还没登上 tailnet：%1）"),
+          QStringLiteral("(this machine could not join the tailnet: %1)") },
+        { QStringLiteral("（本机还在登录 tailnet）"),
+          QStringLiteral("(this machine is still logging in to the tailnet)") },
+        { QStringLiteral("这台机器没登上 tailnet（%1）—— 先在设置里把线路配好，"
+                         "它登上去了对方才看得见"),
+          QStringLiteral("This machine is not on the tailnet (%1) — fix the network path in "
+                         "Settings first; the peer can only see this machine once it has "
+                         "joined") },
         { QStringLiteral("%1：%2"),                     QStringLiteral("%1: %2") },
         { QStringLiteral("桥接断了"),                   QStringLiteral("The bridge went down") },
 
@@ -816,6 +831,8 @@ const QVector<Pair>& table()
         { QStringLiteral("tailnet %1:%2 → 本机 127.0.0.1:%3"),
           QStringLiteral("tailnet %1:%2 → local 127.0.0.1:%3") },
         { QStringLiteral("%1 → %2（经 tailnet）"),      QStringLiteral("%1 → %2 (over the tailnet)") },
+        { QStringLiteral("%1 已在 tailnet 上（%2:%3）；本机 %4 → 对端"),
+          QStringLiteral("%1 is on the tailnet (%2:%3); local %4 → peer") },
 
         // ── NetworkProbe：体检结论 ────────────────────────────────────────
         { QStringLiteral("连接路径：中继转发（打洞没成功，走服务器中转）"),

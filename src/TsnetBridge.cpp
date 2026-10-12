@@ -3,6 +3,7 @@
 
 #include <QCoreApplication>
 #include <QDir>
+#include <QFile>
 #include <QFileInfo>
 #include <QHash>
 #include <QProcess>
@@ -45,18 +46,45 @@ TsnetBridge::~TsnetBridge()
 
 bool TsnetBridge::isRunning() const
 {
-    return m_proc && m_proc->state() != QProcess::NotRunning;
+    return m_runningForTest || (m_proc && m_proc->state() != QProcess::NotRunning);
+}
+
+// 状态目录：不放 %APPDATA%，跟"绿色免安装"一致，落在 exe 同级。
+QString TsnetBridge::stateDir() const
+{
+    if (!m_stateDir.isEmpty())
+        return m_stateDir;
+    return QCoreApplication::applicationDirPath() + QStringLiteral("/data/tsnet");
+}
+
+QString TsnetBridge::defaultPeerFile() const
+{
+    return stateDir() + QStringLiteral("/peer.txt");
+}
+
+// 把"这次要连谁"写给 pmrelay（serve 模式每 2 秒重读一次）。
+// 覆盖写，末尾一个换行：外壳可能来不及写完就被读走，pmrelay 那边 trim 过，不会出问题。
+bool TsnetBridge::setCurrentPeer(const QString& peer)
+{
+    const QString path = m_peerFile.isEmpty() ? defaultPeerFile() : m_peerFile;
+    QDir().mkpath(QFileInfo(path).absolutePath());
+    QFile f(path);
+    if (!f.open(QIODevice::WriteOnly | QIODevice::Truncate))
+        return false;
+    f.write(peer.trimmed().toUtf8());
+    f.write("\n");
+    return true;
 }
 
 QStringList TsnetBridge::buildArgs(Mode m) const
 {
-    // 状态目录：不放 %APPDATA%，跟"绿色免安装"一致，落在 exe 同级。
-    QString dir = m_stateDir;
-    if (dir.isEmpty())
-        dir = QCoreApplication::applicationDirPath() + QStringLiteral("/data/tsnet");
+    const QString dir = stateDir();
 
-    QStringList a{QStringLiteral("-mode"),
-                  m == Mode::Expose ? QStringLiteral("expose") : QStringLiteral("connect"),
+    const QString modeName = m == Mode::Expose ? QStringLiteral("expose")
+                             : m == Mode::Serve ? QStringLiteral("serve")
+                                                : QStringLiteral("connect");
+
+    QStringList a{QStringLiteral("-mode"), modeName,
                   QStringLiteral("-dir"), dir,
                   QStringLiteral("-hostname"),
                   m_hostname.isEmpty() ? QStringLiteral("puremote") : m_hostname,
@@ -71,10 +99,14 @@ QStringList TsnetBridge::buildArgs(Mode m) const
                   QStringLiteral("-parent-pid"),
                   QString::number(QCoreApplication::applicationPid())};
 
-    if (m == Mode::Expose) {
+    if (m == Mode::Expose || m == Mode::Serve) {
         a << QStringLiteral("-listen") << QString::number(m_listenPort)
           << QStringLiteral("-target")
           << QStringLiteral("127.0.0.1:%1").arg(m_targetPort);
+        if (m == Mode::Serve) {
+            a << QStringLiteral("-local") << localAddress() << QStringLiteral("-peerfile")
+              << (m_peerFile.isEmpty() ? defaultPeerFile() : m_peerFile);
+        }
     } else {
         a << QStringLiteral("-local") << localAddress() << QStringLiteral("-peer") << m_peer
           << QStringLiteral("-peerport") << QString::number(m_listenPort);
@@ -109,8 +141,10 @@ bool TsnetBridge::start(Mode m)
     m_tailnetIp.clear();
     m_peerRelay.clear();
     m_peerDirect.clear();
+    m_peerName.clear();
     m_loginUrl.clear();
     m_lastError.clear();
+    m_fatalError.clear();
     m_readyDetail.clear();
     m_peerOnline = false;
     m_peerSeen   = false;
@@ -144,6 +178,10 @@ bool TsnetBridge::start(Mode m)
 
 void TsnetBridge::stop()
 {
+    // 先清测试那个"假装在跑"的旗子：**任何人**调 stop() 都该让 isRunning() 变 false，
+    // 否则"这次收尾有没有把常驻桥接一起收走"就没法断言（无头测试里没有真进程）。
+    m_runningForTest = false;
+    m_fatalError.clear();   // 收掉了就别再拿上一次的死因去解释下一次
     if (!m_proc)
         return;
     QProcess* p = m_proc;
@@ -238,6 +276,11 @@ void TsnetBridge::parseLine(const QString& raw)
             m_readyDetail = TR("tailnet %1:%2 → 本机 127.0.0.1:%3")
                                 .arg(m_tailnetIp, kv.value(QStringLiteral("listen")),
                                      kv.value(QStringLiteral("target")).section(QLatin1Char(':'), -1));
+        } else if (modeName == QLatin1String("serve")) {
+            m_readyDetail = TR("%1 已在 tailnet 上（%2:%3）；本机 %4 → 对端")
+                                .arg(kv.value(QStringLiteral("hostname")), m_tailnetIp,
+                                     kv.value(QStringLiteral("listen")),
+                                     kv.value(QStringLiteral("local")));
         } else {
             m_readyDetail = TR("%1 → %2（经 tailnet）")
                                 .arg(kv.value(QStringLiteral("local")),
@@ -245,16 +288,20 @@ void TsnetBridge::parseLine(const QString& raw)
         }
         emit ready(modeName, m_readyDetail);
     } else if (kind == QLatin1String("PEER")) {
-        const bool online = kv.value(QStringLiteral("online")) == QLatin1String("true");
-        m_peerRelay       = kv.value(QStringLiteral("relay"));
-        m_peerDirect      = kv.value(QStringLiteral("direct"));
-        // 只在**变化**时发信号，否则界面每 2 秒被刷一次
-        if (!m_peerSeen || online != m_peerOnline) {
-            m_peerSeen   = true;
-            m_peerOnline = online;
+        const bool    online = kv.value(QStringLiteral("online")) == QLatin1String("true");
+        const QString name   = kv.value(QStringLiteral("name"));
+        // ⚠ 判"变化"必须连**名字**一起判。常驻桥接是同一个进程连着给不同的对端干活：
+        //   上一个对端在线（online=true）、这次要连的那个也刚上线（online=true）——
+        //   只看 online 的话这一声根本不发出去，外壳就会一直等着一个**已经在线**的对端。
+        const bool changed = !m_peerSeen || online != m_peerOnline || name != m_peerName;
+        // 名字和 relay/direct 每次都记：槽里要能判断"这一行说的是不是我在等的那个"
+        m_peerName   = name;
+        m_peerRelay  = kv.value(QStringLiteral("relay"));
+        m_peerDirect = kv.value(QStringLiteral("direct"));
+        m_peerOnline = online;
+        if (changed) {
+            m_peerSeen = true;
             emit peerStateChanged(online, m_peerRelay, m_peerDirect);
-        } else {
-            m_peerOnline = online;
         }
     } else if (kind == QLatin1String("CONN")) {
         emit connectionSeen(kv.value(QStringLiteral("from")));
@@ -271,6 +318,9 @@ void TsnetBridge::parseLine(const QString& raw)
         emit bridgeError(kv.value(QStringLiteral("what")), m_lastError);
     } else if (kind == QLatin1String("FATAL")) {
         m_lastError = kv.value(QStringLiteral("detail"));
+        // FATAL = pmrelay 自己都不打算继续了（密钥不对 / 监听失败 / 参数错）。
+        // 单独记一份，好让外壳一眼分清"这台机器根本没登上 tailnet"和"刚才那次转发没连上"。
+        m_fatalError = m_lastError;
         emit bridgeError(kv.value(QStringLiteral("what")), m_lastError);
     }
 }
