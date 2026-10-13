@@ -168,6 +168,12 @@ void ConnectSession::connectToTarget(const QString& target, const QString& passw
 void ConnectSession::beginConnect(const Contact& c, bool allowTsnet)
 {
     m_armedPeer.clear();   // 由 beginTsnet 按"这次连谁"重新置上（非 tsnet 档全程为空）
+    // ⚠ 这次连的是谁，**记在会话里**，别在放行那一刻回地址簿按下标取。
+    //   「填码直接连」那条路次没有下标（m_index = -1），回地址簿取回来的是个空对象 ——
+    //   于是对端明明上线了，却报「这条联系人没填 tailnet 主机名」，密码也一起丢掉。
+    //   （用户实机现场：老路径下这个 bug 让 adhoc + tailnet 这一组合根本连不上。）
+    m_pendingHost     = c.targetFor(QStringLiteral("tsnet"));
+    m_pendingPassword = c.peerPassword;
 
     if (allowTsnet && tsnetMode()) {
         beginTsnet(c);
@@ -198,7 +204,7 @@ void ConnectSession::beginTsnet(const Contact& c)
     // 这个进程就是"这台机器挂在 tailnet 上"这件事本身（别人连得进来全靠它）。
     // 连接结束把它停掉 = 顺手把整台机器的可达性关了，那不是一次连接的收尾该干的事。
     if (persistentBridge()) {
-        m_armedPeer = host;
+        m_armedPeer = host;   // == m_pendingHost，名字比对用；放行时读 m_pendingHost
         // ⚠ 这一条**不因 dry-run 而跳过**。dry-run 压的是"别起进程"，而这里从头到尾
         //   不碰任何进程（常驻桥接就是外壳自己拉起来的那个）—— 唯一的外部动作是写这个
         //   小文件，而那正是这条路径的全部意义：没写下去，点谁都会连到上一个对端。
@@ -357,13 +363,12 @@ void ConnectSession::onPeerState(bool online, const QString& relay, const QStrin
         return;
 
     m_peerTimer->stop();
-    const Contact c = m_book && m_index >= 0 ? m_book->at(m_index) : Contact();
-    const QString host = c.targetFor(QStringLiteral("tsnet"));
-    if (host.isEmpty()) {
+    // 用会话里记着的那个目标，**不回地址簿按下标取**（原因见 beginConnect）。
+    if (m_pendingHost.isEmpty()) {
         fail(TR("对端上线了，但这条联系人没填 tailnet 主机名"));
         return;
     }
-    launchClient(m_bridge ? m_bridge->localAddress() : QString(), c.peerPassword);
+    launchClient(m_bridge ? m_bridge->localAddress() : QString(), m_pendingPassword);
 }
 
 void ConnectSession::onPeerTimeout()

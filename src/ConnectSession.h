@@ -148,4 +148,8 @@ private:
     QStringList m_lastArgs;
     QString     m_lastTarget;
     QString     m_armedPeer;   // 这次写给常驻桥接的对端（空 = 不是常驻模式）
+    // 这次连接的目标（在 beginConnect 里从传进来的联系人取，来源与地址簿无关）。
+    // 放行那一刻**只认这两个**：回头按 m_index 取会把「填码直接连」那条路取成空。
+    QString     m_pendingHost;
+    QString     m_pendingPassword;
 };

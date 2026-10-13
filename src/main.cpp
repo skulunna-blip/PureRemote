@@ -2115,6 +2115,53 @@ static int runBookTest()
             check(QStringLiteral("C46 一次失败的转发（ERROR）不算桥接坏了 —— 照样正常等对端"),
                   s12.phase() == ConnectSession::Phase::Preparing && b12.isRunning());
         }
+
+        // ---- 用户报的现场：**填码直接连** + tailnet 档 ----
+        // 对端（就是它自己）明明上线了，界面却报「对端上线了，但这条联系人没填 tailnet 主机名」，
+        // 远程窗口一直不出现。C34–C40 走的是地址簿那条（m_index>=0），漏了这条路：
+        // adhoc 没有下标（m_index = -1），而放行那一刻原来是**回地址簿按下标取**联系人的 ——
+        // 取回来一个空对象，于是主机名"没有"，连密码也一起丢了。
+        {
+            const QString tmpDir3 =
+                QDir(QDir::tempPath()).filePath(QStringLiteral("puremote-c-adhoc"));
+            QDir().mkpath(tmpDir3);
+            const QString peerFile3 = tmpDir3 + QStringLiteral("/peer.txt");
+            QFile::remove(peerFile3);
+
+            TsnetBridge b13;
+            b13.setModeForTest(TsnetBridge::Mode::Serve);
+            b13.setRunningForTest(true);
+            b13.setPeerFile(peerFile3);
+            b13.feedLineForTest(QStringLiteral("PMRELAY READY mode=serve ip=100.64.0.9 "
+                                               "hostname=self-name listen=21118 "
+                                               "target=127.0.0.1:21118 local=127.0.0.1:21119"));
+
+            ConnectSession s13(&cfg, nullptr, &b13, &bookC);
+            s13.setDryRunForTest(true);
+            QString fail13;
+            QObject::connect(&s13, &ConnectSession::failed,
+                             [&fail13](const QString& m) { fail13 = m; });
+
+            Contact a13;
+            a13.tsnetHost    = QStringLiteral("this-pc");   // 自连：对端就是本机自己
+            a13.peerPassword = QStringLiteral("pw-adhoc");  // 没存进地址簿的那条临时目标
+            s13.connectToAdhoc(a13);
+            check(QStringLiteral("C47 填码直接连（没有地址簿下标）也能走到等对端这一步"),
+                  s13.phase() == ConnectSession::Phase::WaitingPeer
+                      && s13.contactIndex() < 0);
+
+            b13.feedLineForTest(
+                QStringLiteral("PMRELAY PEER name=this-pc online=true relay=hkg direct="));
+            check(QStringLiteral("C48 对端上线 → 真的放行（**不许**报「这条联系人没填 tailnet 主机名」）"),
+                  s13.phase() == ConnectSession::Phase::Running && s13.clientSpawnedForTest()
+                      && fail13.isEmpty());
+            check(QStringLiteral("C49 目标还是桥接的本机入口 127.0.0.1:21119"),
+                  s13.lastTargetForTest() == QStringLiteral("127.0.0.1:21119"));
+            const QStringList a13args = s13.lastConnectArgsForTest();
+            check(QStringLiteral("C50 这条路上的密码也没丢（回地址簿取会把密码一起丢掉）"),
+                  a13args.size() >= 2 && a13args.at(a13args.size() - 2) == QStringLiteral("--password")
+                      && a13args.last() == QStringLiteral("pw-adhoc"));
+        }
     }
 
     // ══ D 段 准备情况（纯函数）═══════════════════════════════════════════
